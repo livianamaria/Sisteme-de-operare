@@ -3,11 +3,14 @@
 #include <string.h>
 #include <unistd.h> //pentru fct de baza gen read(),fork(),getpid(),sleep(),etc.
 #include <fcntl.h> //defineste constante pt controlul fisierelor gen O_RDONLY etc.
+#include <dirent.h> //pentru opendir,readdir,closedir
 #include <signal.h> //pentru semnale
 #include <sys/types.h> //pentru tipuri de date gen pid_t
 #include <sys/wait.h> //pentru wait()
+#include <sys/stat.h> //pentru stat()
 
 #define MAX_LINIE 512
+#define SIZE 204 //id-32B, username-32B, latitude-4B, longitude-4B, clue-128B, value-4B=32+32+4+4+128+4=204.
 #define CMD_FILE "commandfile.txt"
 
 int monitor_pid=-1; //pid ul monitorului, e -1 pt ca inca n a fost pornit
@@ -23,7 +26,7 @@ void handle_sigusr1(int sig)
     int fd=open(path,O_RDONLY); //deschide fisierul pentru citire
     if(fd==-1)
     {
-        perror("MONITOR-Eroare la deschiderea commandfile.txt!!");
+        perror("MONITOR-Eroare la deschiderea commandfile.txt!!\n");
         exit(-1);
     }
 
@@ -49,7 +52,7 @@ void handle_sigusr1(int sig)
             if(pid==0)
             {
 	      execlp("./treasure_manager","treasure_manager","view_treasure",hunt,id,NULL);//inlocuieste copilul cu treasure_manager etc..
-                perror("MONITOR-Eroare la execlp view_treasure");
+                perror("MONITOR-Eroare la execlp view_treasure!!\n");
                 exit(-1);
             }
             else
@@ -67,7 +70,7 @@ void handle_sigusr1(int sig)
             if(pid==0)
             {
 	        execlp("./treasure_manager","treasure_manager","list_treasures",hunt,NULL); //inlocuieste copilul cu treasure_manager etc..
-                perror("Eroare la execlp list_treasures");
+                perror("Eroare la execlp list_treasures!!\n");
                 exit(-1);
             }
             else
@@ -76,9 +79,52 @@ void handle_sigusr1(int sig)
 	    }
         }
     }
+    else if(strcmp(cuv,"list_hunts")==0) //compara cuv cu "list_hunts"
+     {
+       DIR *d=opendir("."); //incearca sa deschida directorul curent
+       if(!d) //daca nu s a putut deschide directorul
+	 {
+	   perror("MONITOR-Nu s-a deschis directorul!!\n");
+	   return;
+	 }
+       printf("MONITOR-Hunts si numarul de comori:\n");
+       struct dirent *e; //folosit pentru a parcurge intrarile din director
+       while((e=readdir(d))!=NULL) //se citeste cate o intrare de director
+	 {
+	   if(e->d_type!=DT_DIR) //verifica daca intrarea nu este un subdirector
+	     {
+	       continue;
+	     }
+	   //sarim peste cele doua directoare speciale
+	   if(strcmp(e->d_name,".")==0) //director curent
+	     {
+	       continue;
+	     }
+	   if(strcmp(e->d_name,"..")==0) //director parinte
+	     {
+	       continue;
+	     }
+
+	   char fpath[256];
+	   int n=snprintf(fpath,sizeof(fpath),"%s/treasures.dat",e->d_name);
+	   if(n<0 || n>=(int)sizeof(fpath)) //daca se depaseste dimensiunea bufferului, se sare peste acest subdirector
+	     {
+	       continue;
+	     }
+
+	   struct stat st; //se declara atributele fisierului gen dimensiune, tip
+	   if(stat(fpath,&st)==0 && S_ISREG(st.st_mode)) //apeleaza stat pe calea construita in fpath, daca fisierul este regulat(S_ISREG), atunci intra in bloc
+	     {
+	       //se imparte dimensiunea fisierului(st.size, in bytes) la SIZE
+	       int count=st.st_size/SIZE; //calculeaza nr de comori din fisier
+	       printf("%s: %d treasures\n",e->d_name,count);
+	     }
+	 }
+       closedir(d);
+     }
     else
     {
-        printf("MONITOR-Comanda necunoscuta: %s\n!!",cuv);
+        printf("MONITOR-Comanda necunoscuta: %s!!\n",cuv);
     }
 }
 
@@ -108,8 +154,8 @@ void monitor_loop()
       pause(); //blocheazza procesul pana la urmatorul semnal
     }
 
-    printf("MONITOR-Oprire...asteptam 2 secunde!!\n");
-    usleep(2000000);
+    printf("MONITOR-Oprire...asteptam o secunda!!\n");
+    sleep(1);
     printf("MONITOR-Monitor oprit!!\n");
     exit(-2);
 }
@@ -125,7 +171,7 @@ void start_monitor()
     pid_t p=fork(); //creeaza proces monitor
     if(p<0) //eroare
     {
-        perror("HUB-Eroare la fork!!");
+        perror("HUB-Eroare la fork!!\n");
         exit(-1);
     }
 
@@ -161,7 +207,7 @@ void list_treasures()
     int fd=open(path,O_WRONLY | O_CREAT | O_TRUNC,0777);
     if(fd==-1)
     {
-        perror("HUB-Eroare la scrierea in commandfile!!");
+        perror("HUB-Eroare la scrierea in commandfile!!\n");
         exit(-1);
     }
 
@@ -171,6 +217,24 @@ void list_treasures()
     close(fd);
 
     kill(monitor_pid,SIGUSR1);
+}
+
+void list_hunts()
+{
+    if(!monitor_running || asteptam_terminare)
+      {
+        printf("HUB-Monitorul nu este activ!!\n");
+        return;
+      }
+    int fd = open(CMD_FILE, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+    if (fd ==-1)
+      {
+	perror("HUB-open cmd");
+	return;
+      }
+    write(fd, "list_hunts", 11);
+    close(fd);
+    kill(monitor_pid, SIGUSR1);
 }
 
 void view_treasure()
@@ -197,7 +261,7 @@ void view_treasure()
     int fd=open(path, O_WRONLY | O_CREAT | O_TRUNC,0777);
     if(fd==-1)
     {
-        perror("HUB-Eroare la scrierea in commandfile!!");
+        perror("HUB-Eroare la scrierea in commandfile!!\n");
         exit(-1);
     }
 
@@ -226,11 +290,11 @@ void stop_monitor()
 
     if(WIFEXITED(status)) //verificam daca s a incheiat normal
     {
-        printf("HUB-Monitor s-a oprit cu cod %d\n!!",WEXITSTATUS(status));
+        printf("HUB-Monitor s-a oprit cu cod %d!!\n",WEXITSTATUS(status));
     }
     else
     {
-        printf("HUB-Monitor oprit anormal\n!!");
+        printf("HUB-Monitor oprit anormal!!\n");
     }
 
     monitor_running=0; //nu mai ruleaza
@@ -242,7 +306,7 @@ int main(void)
 {
     char input[MAX_LINIE];
 
-    printf("------Treasure Hub------\n");
+    printf("----------------Treasure Hub----------------\n");
     printf("Comenzi: start_monitor, list_treasures, view_treasure, stop_monitor, exit\n\n");
 
     int running=1;
@@ -271,6 +335,10 @@ int main(void)
 	  {
               view_treasure();
 	  }
+	else if(strcmp(input,"list_hunts")==0) //cere listarea hunt-urilor
+          {
+	      list_hunts();
+          }
         else if(strcmp(input,"stop_monitor")==0) //opreste monitor
 	  {
               stop_monitor();
