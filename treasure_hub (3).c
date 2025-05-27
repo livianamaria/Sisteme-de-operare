@@ -226,8 +226,8 @@ void list_hunts()
         printf("HUB-Monitorul nu este activ!!\n");
         return;
       }
-    int fd = open(CMD_FILE, O_WRONLY|O_CREAT|O_TRUNC, 0666);
-    if (fd ==-1)
+    int fd=open(CMD_FILE, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+    if(fd==-1)
       {
 	perror("HUB-open cmd");
 	return;
